@@ -1,0 +1,117 @@
+
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+
+const phoneNumber = process.env.PHONE_NUMBER;
+const apiKey = process.env.OPENAI_API_KEY;
+
+if (!phoneNumber || !apiKey) {
+  throw new Error(
+    "Faltan PHONE_NUMBER y OPENAI_API_KEY"
+  );
+}
+
+async function askAI(question) {
+  const response = await fetch(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Sos un asistente útil, amigable y respondés en español."
+          },
+          { role: "user", content: question }
+        ]
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Error de IA: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+async function startBot() {
+  const { state, saveCreds } =
+    await useMultiFileAuthState("auth_info");
+
+  const sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: "silent" }),
+    printQRInTerminal: false
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+
+  if (!state.creds.registered) {
+    const code = await sock.requestPairingCode(
+      phoneNumber.replace(/\D/g, "")
+    );
+    console.log("Código para vincular:", code);
+  }
+
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    for (const msg of messages) {
+      if (!msg.message || msg.key.fromMe) continue;
+
+      const jid = msg.key.remoteJid;
+      if (!jid?.endsWith("@g.us")) continue;
+
+      const content = msg.message;
+      const text =
+        content.conversation ||
+        content.extendedTextMessage?.text ||
+        content.imageMessage?.caption ||
+        "";
+
+      if (!text.toLowerCase().startsWith("!ia ")) continue;
+
+      const question = text.slice(4).trim();
+      if (!question) continue;
+
+      try {
+        await sock.sendMessage(jid, {
+          text: await askAI(question)
+        }, { quoted: msg });
+      } catch (error) {
+        console.error(error);
+        await sock.sendMessage(jid, {
+          text: "No pude responder ahora. Probá de nuevo."
+        }, { quoted: msg });
+      }
+    }
+  });
+
+  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+    if (connection === "close") {
+      const status =
+        lastDisconnect?.error?.output?.statusCode;
+
+      if (status !== DisconnectReason.loggedOut) {
+        console.log("Conexión cerrada; hay que reconectar.");
+      } else {
+        console.log("Sesión cerrada. Hay que vincular de nuevo.");
+      }
+    }
+
+    if (connection === "open") {
+      console.log("¡Bot conectado a WhatsApp!");
+    }
+  });
+}
+
+startBot().catch(console.error);
