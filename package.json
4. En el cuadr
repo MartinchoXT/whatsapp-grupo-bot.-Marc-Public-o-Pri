@@ -1,0 +1,17 @@
+
+{
+  "name": "whatsapp-grupo-bot",
+  "version": "1.0.0",
+  "description": "Bot de IA para un grupo de WhatsApp",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "pino": "^9.0.0"
+  }
+}
